@@ -25,7 +25,7 @@ class DVRouter(DVRouterBase):
     # -----------------------------------------------
     # At most one of these should ever be on at once
     SPLIT_HORIZON = False
-    POISON_REVERSE = False
+    POISON_REVERSE = True
     # -----------------------------------------------
 
     # Determines if you send poison for expired routes
@@ -105,7 +105,18 @@ class DVRouter(DVRouterBase):
         if force:
             for p in self.ports.get_all_ports():
                 for k, v in self.table.items():
-                    self.send_route(port=p, dst=k, latency=v.latency)
+                    if self.SPLIT_HORIZON: 
+                        if p != v.port:#  if this port is not the route's next hop
+                            self.send_route(port=p, dst=k, latency=v.latency)
+                        continue
+                    elif self.POISON_REVERSE:
+                        if p != v.port:
+                            self.send_route(port=p, dst=k, latency=v.latency)
+                        else: # if this port is next hop, send a INFINITY latency back (poison it)
+                            self.send_route(port=p, dst=k, latency=INFINITY)
+                        continue
+                    else:
+                        self.send_route(port=p, dst=k, latency=v.latency)
 
     def expire_routes(self):
         """
@@ -113,6 +124,13 @@ class DVRouter(DVRouterBase):
         accordingly.
         """
         # TODO: fill this in!
+        expire_host = []
+        for k, v in self.table.items():
+            if v.expire_time - api.current_time() <= 0:
+                expire_host.append(k)
+        for host in expire_host:
+            del self.table[host]
+            self.s_log(f"Router {self.name}'s route to {host.name} is expired")
 
     def handle_route_advertisement(self, route_dst, route_latency, port):
         """
@@ -125,11 +143,15 @@ class DVRouter(DVRouterBase):
         """
         # TODO: fill this in!
         new_latency = route_latency + self.ports.get_latency(port)
+        if new_latency > INFINITY: # don't exceed INFINITY!
+            new_latency = INFINITY
         expire_time = self.ROUTE_TTL + api.current_time()
-        if route_dst not in self.table.keys() or (
-                    route_dst in self.table.keys() and 
-                    (self.table[route_dst].port == port or # same port, update route
-                     new_latency < self.table[route_dst].latency)): # break tie on choosing current route (spec erro)
+        if route_dst not in self.table.keys() or ( # route in path
+                        ((self.table[route_dst].port == port and # same port, update route
+                            not (new_latency >= INFINITY and self.table[route_dst].latency >= INFINITY)) or # don't charge timer
+                        (new_latency < self.table[route_dst].latency and # new optimal route, break tie on choosing current route (spec erro)
+                            new_latency < INFINITY)) # ignore new routes with latency INFINITY
+                        ):
             self.table[route_dst] = TableEntry(dst=route_dst, 
                                                 port=port, 
                                                 latency=new_latency, 
