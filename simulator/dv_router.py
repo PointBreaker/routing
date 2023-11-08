@@ -73,6 +73,7 @@ class DVRouter(DVRouterBase):
         assert port in self.ports.get_all_ports(), "Link should be up, but is not."
 
         # TODO: fill this in!
+        self.table[host] = TableEntry(dst=host, port=port, latency=self.ports.get_latency(port), expire_time=FOREVER)
 
     def handle_data_packet(self, packet, in_port):
         """
@@ -85,6 +86,9 @@ class DVRouter(DVRouterBase):
         :return: nothing.
         """
         # TODO: fill this in!
+        if packet.dst in self.table.keys() and self.table[packet.dst].latency < INFINITY:
+            self.send(packet=packet, port=self.table[packet.dst].port) # forward
+        # drop
 
     def send_routes(self, force=False, single_port=None):
         """
@@ -98,6 +102,10 @@ class DVRouter(DVRouterBase):
         :return: nothing.
         """
         # TODO: fill this in!
+        if force:
+            for p in self.ports.get_all_ports():
+                for k, v in self.table.items():
+                    self.send_route(port=p, dst=k, latency=v.latency)
 
     def expire_routes(self):
         """
@@ -116,6 +124,16 @@ class DVRouter(DVRouterBase):
         :return: nothing.
         """
         # TODO: fill this in!
+        new_latency = route_latency + self.ports.get_latency(port)
+        expire_time = self.ROUTE_TTL + api.current_time()
+        if route_dst not in self.table.keys() or (
+                    route_dst in self.table.keys() and 
+                    (self.table[route_dst].port == port or # same port, update route
+                     new_latency < self.table[route_dst].latency)): # break tie on choosing current route (spec erro)
+            self.table[route_dst] = TableEntry(dst=route_dst, 
+                                                port=port, 
+                                                latency=new_latency, 
+                                                expire_time=expire_time)
 
     def handle_link_up(self, port, latency):
         """
