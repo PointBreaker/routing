@@ -106,42 +106,50 @@ class DVRouter(DVRouterBase):
         # TODO: fill this in!
         if single_port != None:
             for k, v in self.table.items():
-                self.history[k] = (v.port, v.latency)
+                self.history[(k, v.port)] = v.latency
                 self.send_route(port=single_port, dst=k, latency=v.latency)
         if force:
             for p in self.ports.get_all_ports():
                 for k, v in self.table.items():
-                    self.history[k] = (v.port, v.latency)
                     if self.SPLIT_HORIZON: 
                         if p != v.port:#  if this port is not the route's next hop
                             self.send_route(port=p, dst=k, latency=v.latency)
+                            self.history[(k, v.port)] = v.latency
                         continue
                     elif self.POISON_REVERSE:
                         if p != v.port:
                             self.send_route(port=p, dst=k, latency=v.latency)
+                            self.history[(k, v.port)] = v.latency
                         else: # if this port is next hop, send a INFINITY latency back (poison it)
                             self.send_route(port=p, dst=k, latency=INFINITY)
+                            self.history[(k, v.port)] = INFINITY
                         continue
                     else:
                         self.send_route(port=p, dst=k, latency=v.latency)
+                        self.history[(k, v.port)] = v.latency
         else:
             for k, v in self.table.items():
-                t = (v.port, v.latency)
-                if k not in self.history.keys() or self.history[k] != t: # missing or different
-                    self.history[k] = t
+                if (k, v.port) not in self.history.keys() or self.history[(k, v.port)] != v.latency: # missing or different
                     for p in self.ports.get_all_ports():
                         if self.SPLIT_HORIZON: 
                             if p != v.port: #  if this port is not the route's next hop
                                 self.send_route(port=p, dst=k, latency=v.latency)
+                                self.history[(k, v.port)] = v.latency
                             continue
                         elif self.POISON_REVERSE:
                             if p != v.port:
                                 self.send_route(port=p, dst=k, latency=v.latency)
+                                self.history[(k, v.port)] = v.latency
                             else: # if this port is next hop, send a INFINITY latency back (poison it)
+                                print("Port:", p)
+                                print("Host:", k.name)
+                                print("Latency:", v.latency)
                                 self.send_route(port=p, dst=k, latency=INFINITY)
+                                self.history[(k, v.port)] = INFINITY
                             continue
                         else:
                             self.send_route(port=p, dst=k, latency=v.latency)
+                            self.history[(k, v.port)] = v.latency
 
     def expire_routes(self):
         """
@@ -155,8 +163,11 @@ class DVRouter(DVRouterBase):
                 expire_host.append(k)
         for host in expire_host:
             if self.POISON_EXPIRED:
-                dst, port = self.table[host].dst, self.table[host].port
-                self.table[host] = TableEntry(dst=dst, port=port, latency=INFINITY, expire_time=api.current_time() + self.ROUTE_TTL) # poisoning for a ttl
+                if self.table[host].latency >= INFINITY:
+                    del self.table[host]
+                else:
+                    dst, port = self.table[host].dst, self.table[host].port
+                    self.table[host] = TableEntry(dst=dst, port=port, latency=INFINITY, expire_time=api.current_time() + self.ROUTE_TTL) # poisoning for a ttl
             else:
                 del self.table[host]
             self.s_log(f"Router {self.name}'s route to {host.name} is expired")
@@ -178,8 +189,7 @@ class DVRouter(DVRouterBase):
         if route_dst not in self.table.keys() or ( # route in path
                         ((self.table[route_dst].port == port and # same port, update route
                             not (new_latency >= INFINITY and self.table[route_dst].latency >= INFINITY)) or # don't charge timer
-                        (new_latency < self.table[route_dst].latency and # new optimal route, break tie on choosing current route (spec erro)
-                            new_latency < INFINITY)) # ignore new routes with latency INFINITY
+                        new_latency < self.table[route_dst].latency) # new optimal route
                         ):
             self.table[route_dst] = TableEntry(dst=route_dst, 
                                                 port=port, 
