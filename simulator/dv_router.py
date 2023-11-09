@@ -106,7 +106,7 @@ class DVRouter(DVRouterBase):
         # TODO: fill this in!
         if single_port != None:
             for k, v in self.table.items():
-                self.history[(k, v.port)] = v.latency
+                self.history[(k, single_port)] = v.latency
                 self.send_route(port=single_port, dst=k, latency=v.latency)
         if force:
             for p in self.ports.get_all_ports():
@@ -114,42 +114,42 @@ class DVRouter(DVRouterBase):
                     if self.SPLIT_HORIZON: 
                         if p != v.port:#  if this port is not the route's next hop
                             self.send_route(port=p, dst=k, latency=v.latency)
-                            self.history[(k, v.port)] = v.latency
+                            self.history[(k, p)] = v.latency
                         continue
                     elif self.POISON_REVERSE:
                         if p != v.port:
                             self.send_route(port=p, dst=k, latency=v.latency)
-                            self.history[(k, v.port)] = v.latency
+                            self.history[(k, p)] = v.latency
                         else: # if this port is next hop, send a INFINITY latency back (poison it)
                             self.send_route(port=p, dst=k, latency=INFINITY)
-                            self.history[(k, v.port)] = INFINITY
+                            self.history[(k, p)] = INFINITY
                         continue
                     else:
                         self.send_route(port=p, dst=k, latency=v.latency)
-                        self.history[(k, v.port)] = v.latency
+                        self.history[(k, p)] = v.latency
         else:
             for k, v in self.table.items():
-                if (k, v.port) not in self.history.keys() or self.history[(k, v.port)] != v.latency: # missing or different
-                    for p in self.ports.get_all_ports():
+                for p in self.ports.get_all_ports():
+                    if (k, p) not in self.history.keys() or self.history[(k, p)] != v.latency: # missing or different
                         if self.SPLIT_HORIZON: 
                             if p != v.port: #  if this port is not the route's next hop
                                 self.send_route(port=p, dst=k, latency=v.latency)
-                                self.history[(k, v.port)] = v.latency
+                                self.history[(k, p)] = v.latency
                             continue
                         elif self.POISON_REVERSE:
                             if p != v.port:
                                 self.send_route(port=p, dst=k, latency=v.latency)
-                                self.history[(k, v.port)] = v.latency
+                                self.history[(k, p)] = v.latency
                             else: # if this port is next hop, send a INFINITY latency back (poison it)
-                                print("Port:", p)
-                                print("Host:", k.name)
-                                print("Latency:", v.latency)
-                                self.send_route(port=p, dst=k, latency=INFINITY)
-                                self.history[(k, v.port)] = INFINITY
+                                if (k, p) in self.history.keys() and self.history[(k, p)] == INFINITY:
+                                    continue # sometimes INIFINITY is sent, it is not in the history, so additional conditiaon must be checked
+                                else:
+                                    self.send_route(port=p, dst=k, latency=INFINITY)
+                                    self.history[(k, p)] = INFINITY
                             continue
                         else:
                             self.send_route(port=p, dst=k, latency=v.latency)
-                            self.history[(k, v.port)] = v.latency
+                            self.history[(k, p)] = v.latency
 
     def expire_routes(self):
         """
@@ -186,10 +186,9 @@ class DVRouter(DVRouterBase):
         if new_latency > INFINITY: # don't exceed INFINITY!
             new_latency = INFINITY
         expire_time = self.ROUTE_TTL + api.current_time()
-        if route_dst not in self.table.keys() or ( # route in path
-                        ((self.table[route_dst].port == port and # same port, update route
-                            not (new_latency >= INFINITY and self.table[route_dst].latency >= INFINITY)) or # don't charge timer
-                        new_latency < self.table[route_dst].latency) # new optimal route
+        if route_dst not in self.table.keys() or (                  # route in path
+                        self.table[route_dst].port == port or       # same port
+                        new_latency < self.table[route_dst].latency # new optimal route
                         ):
             self.table[route_dst] = TableEntry(dst=route_dst, 
                                                 port=port, 
